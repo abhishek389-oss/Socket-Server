@@ -31,9 +31,9 @@ const mongodbUrl = process.env.MONGODB_URL;
 const connectDB = async () => {
   try {
     await mongoose.connect(mongodbUrl);
-    console.log("DB connected");
+    console.log("DB connected successfully");
   } catch (error) {
-    console.log("Db error", error);
+    console.log("DB connection error:", error);
   }
 };
 
@@ -45,7 +45,13 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true
   },
+  pingTimeout: 20000,
+  pingInterval: 10000,
+  transports: ["websocket", "polling"]
 });
+
+const userSocketMap = new Map(); // userId -> socketId
+const socketUserMap = new Map(); // socketId -> userId
 
 app.post("/emit", async (req, res) => {
   try {
@@ -55,18 +61,28 @@ app.post("/emit", async (req, res) => {
       return res.status(400).json({ success: false, message: "User ID is required" });
     }
 
-    const user = await User.findById(userId);
+    const strUserId = String(userId);
 
-    if (user && user.socketId) {
-      io.to(user.socketId).emit(event, data);
-      console.log(`Event "${event}" emitted to user: ${userId} on socket: ${user.socketId}`);
-    } else {
-      console.log(`User ${userId} not online or socketId missing.`);
+    let socketId = userSocketMap.get(strUserId);
+
+    if (!socketId) {
+      const user = await User.findById(userId).select("socketId");
+      if (user?.socketId) {
+        socketId = user.socketId;
+        userSocketMap.set(strUserId, socketId);
+      }
     }
 
-    return res.status(200).json({ success: true });
+    if (socketId) {
+      io.to(socketId).emit(event, data);
+      console.log(`[EMIT SUCCESS] Event "${event}" sent to user ${userId} on socket ${socketId}`);
+      return res.status(200).json({ success: true });
+    } else {
+      console.log(`[EMIT FAIL] User ${userId} is offline or not registered.`);
+      return res.status(200).json({ success: false, message: "User not online" });
+    }
   } catch (error) {
-    console.log("Emit error:", error);
+    console.log("Emit route error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -77,44 +93,28 @@ io.on("connection", (socket) => {
   socket.on("identity", async (userId) => {
     try {
       if (!userId) return;
-      socket.userId = userId;
-      await User.findByIdAndUpdate(userId, {
+      const strUserId = String(userId);
+      socket.userId = strUserId;
+
+      userSocketMap.set(strUserId, socket.id);
+      socketUserMap.set(socket.id, strUserId);
+
+      User.findByIdAndUpdate(strUserId, {
         socketId: socket.id,
         isOnline: true,
-      });
-      console.log(`User ${userId} registered with socket ${socket.id}`);
+      }).catch((e) => console.log("DB update error on identity:", e));
+
+      console.log(`User ${strUserId} registered with socket ${socket.id}`);
     } catch (error) {
       console.log("Identity error:", error);
     }
   });
 
-  socket.on("disconnect", async () => {
-    try {
-      if (!socket.userId) return;
-      await User.findByIdAndUpdate(socket.userId, {
-        socketId: null,
-        isOnline: false,
-      });
-      console.log(`User ${socket.userId} disconnected`);
-    } catch (error) {
-      console.log("Disconnect error:", error);
-    }
-  });
-
-  socket.on("update-location", async ({ userId, location }) => {
-    try {
-      if (!userId || !location) return;
-      await User.findByIdAndUpdate(userId, {
-        location: location,
-      });
-    } catch (error) {
-      console.log("update-location error:", error);
-    }
-  });
-
   socket.on("join_ride", (bookingId) => {
-    socket.join(`ride_${bookingId}`);
-    console.log(`Socket ${socket.id} joined ride_${bookingId}`);
+    if (!bookingId) return;
+    const room = `ride_${bookingId}`;
+    socket.join(room);
+    console.log(`Socket ${socket.id} joined room ${room}`);
   });
 
   socket.on("driver_location_update", (data) => {
@@ -137,12 +137,42 @@ io.on("connection", (socket) => {
 
   socket.on("chat_message", (messageData) => {
     if (messageData?.bookingId) {
-      io.to(`ride_${messageData.bookingId}`).emit("chat_message", messageData);
+      const room = `ride_${messageData.bookingId}`;
+      socket.to(room).emit("chat_message", messageData);
+      console.log(`[CHAT] Relayed message in ${room}`);
+    }
+  });
+
+  socket.on("update-location", async ({ userId, location }) => {
+    try {
+      if (!userId || !location) return;
+      await User.findByIdAndUpdate(userId, { location: location });
+    } catch (error) {
+      console.log("update-location error:", error);
+    }
+  });
+
+  socket.on("disconnect", async () => {
+    try {
+      const userId = socket.userId || socketUserMap.get(socket.id);
+      if (userId) {
+        userSocketMap.delete(userId);
+        socketUserMap.delete(socket.id);
+
+        User.findByIdAndUpdate(userId, {
+          socketId: null,
+          isOnline: false,
+        }).catch((e) => console.log("DB update error on disconnect:", e));
+
+        console.log(`User ${userId} disconnected`);
+      }
+    } catch (error) {
+      console.log("Disconnect error:", error);
     }
   });
 });
 
 server.listen(port, () => {
-  console.log(`Server started on port ${port}`);
+  console.log(`Server running on port ${port}`);
   connectDB();
 });
