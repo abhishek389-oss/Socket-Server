@@ -29,8 +29,11 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "https://rydex-five.vercel.app",
+    origin: ["https://rydex-lemon-nine.vercel.app",
+      "http://localhost:3000"
+    ],
     methods: ["GET", "POST"],
+    credentials:true
   },
 });
 
