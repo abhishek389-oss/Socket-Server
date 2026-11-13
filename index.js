@@ -50,12 +50,18 @@ const io = new Server(server, {
   transports: ["websocket", "polling"]
 });
 
-const userSocketMap = new Map(); // userId -> socketId
-const socketUserMap = new Map(); // socketId -> userId
+const userSocketMap = new Map();
+const socketUserMap = new Map();
 
 app.post("/emit", async (req, res) => {
   try {
     const { event, userId, data } = req.body;
+
+    if (userId === "admin") {
+      io.to("admin_room").emit(event, data);
+      console.log(`[EMIT SUCCESS] Event "${event}" sent to admin_room`);
+      return res.status(200).json({ success: true });
+    }
 
     if (!userId) {
       return res.status(400).json({ success: false, message: "User ID is required" });
@@ -89,6 +95,11 @@ app.post("/emit", async (req, res) => {
 
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
+
+  socket.on("join_admin", () => {
+    socket.join("admin_room");
+    console.log(`Admin joined admin_room: ${socket.id}`);
+  });
 
   socket.on("identity", async (userId) => {
     try {
