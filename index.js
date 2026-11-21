@@ -146,9 +146,10 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("chat_message", (messageData) => {
+ socket.on("chat_message", (messageData) => {
     if (messageData?.bookingId) {
       const room = `ride_${messageData.bookingId}`;
+      socket.join(room);
       socket.to(room).emit("chat_message", messageData);
       console.log(`[CHAT] Relayed message in ${room}`);
     }
