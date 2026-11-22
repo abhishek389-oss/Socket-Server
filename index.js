@@ -53,6 +53,10 @@ const io = new Server(server, {
 const userSocketMap = new Map();
 const socketUserMap = new Map();
 
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 app.post("/emit", async (req, res) => {
   try {
     const { event, userId, data } = req.body;
